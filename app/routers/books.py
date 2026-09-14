@@ -19,6 +19,7 @@ def create_book(
     session: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ):
+    # Check that the author exists
     author = session.get(Author, book.author_id)
 
     if not author:
@@ -27,6 +28,18 @@ def create_book(
             detail="Author not found",
         )
 
+    # Check whether the ISBN already exists
+    existing_book = session.exec(
+        select(Book).where(Book.isbn == book.isbn)
+    ).first()
+
+    if existing_book:
+        raise HTTPException(
+            status_code=409,
+            detail="A book with this ISBN already exists.",
+        )
+
+    # Create the book
     new_book = Book(
         title=book.title,
         isbn=book.isbn,
@@ -49,7 +62,6 @@ def create_book(
         description=new_book.description,
         author=author.name,
     )
-
 
 @router.get("/", response_model=list[BookRead])
 def get_books(session: Session = Depends(get_session)):
@@ -95,33 +107,68 @@ def get_book(book_id: int, session: Session = Depends(get_session)):
 @router.put("/{book_id}", response_model=BookRead)
 def update_book(
     book_id: int,
-    data: BookUpdate,
+    book_data: BookUpdate,
     session: Session = Depends(get_session),
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
+    # Find the book
     book = session.get(Book, book_id)
+
     if not book:
-        raise HTTPException(status_code=404, detail="Book not found.")
+        raise HTTPException(
+            status_code=404,
+            detail="Book not found",
+        )
 
-    update_data = data.model_dump(exclude_unset=True)
+    # Check author if author_id is being changed
+    if book_data.author_id is not None:
+        author = session.get(Author, book_data.author_id)
 
-    if "author_id" in update_data and not session.get(Author, update_data["author_id"]):
-        raise HTTPException(status_code=404, detail="Author not found.")
+        if not author:
+            raise HTTPException(
+                status_code=404,
+                detail="Author not found",
+            )
+    else:
+        author = session.get(Author, book.author_id)
 
-    for key, value in update_data.items():
-        setattr(book, key, value)
+    # Check ISBN only if a new ISBN was provided
+    if book_data.isbn is not None:
+        existing_book = session.exec(
+            select(Book).where(
+                Book.isbn == book_data.isbn,
+                Book.id != book_id,
+            )
+        ).first()
+
+        if existing_book:
+            raise HTTPException(
+                status_code=409,
+                detail="A book with this ISBN already exists.",
+            )
+
+    # Update only the fields provided
+    update_data = book_data.model_dump(exclude_unset=True)
+
+    for field, value in update_data.items():
+        setattr(book, field, value)
 
     session.add(book)
+    session.commit()
+    session.refresh(book)
 
-    try:
-        session.commit()
-        session.refresh(book)
-    except IntegrityError:
-        session.rollback()
-        raise HTTPException(status_code=409, detail="A book with this ISBN already exists.")
+    # Get the current author
+    author = session.get(Author, book.author_id)
 
-    return book
-
+    return BookRead(
+        id=book.id,
+        title=book.title,
+        isbn=book.isbn,
+        price=book.price,
+        published_year=book.published_year,
+        description=book.description,
+        author=author.name,
+    )
 
 @router.delete("/{book_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_book(
