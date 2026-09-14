@@ -29,9 +29,9 @@ app.add_middleware(
     secret_key=settings.secret_key,
     session_cookie=settings.session_cookie_name,
     max_age=settings.session_expire_seconds,
-    httponly=True,
-    samesite="lax",
-    https_only=settings.app_env == "production",
+    # httponly=True,
+    same_site="lax",
+    https_only=settings.app_env == "False",
 )
 
 app.include_router(auth_router)
