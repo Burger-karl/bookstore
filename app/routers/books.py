@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
+from sqlalchemy.orm import selectinload
 
 from app.database.session import get_session
 from app.dependencies.auth import get_current_user
@@ -12,40 +13,84 @@ from app.schemas.book import BookCreate, BookRead, BookUpdate
 router = APIRouter(prefix="/books", tags=["Books"])
 
 
-@router.post("/", response_model=BookRead, status_code=status.HTTP_201_CREATED)
+@router.post("/", response_model=BookRead, status_code=201)
 def create_book(
-    data: BookCreate,
+    book: BookCreate,
     session: Session = Depends(get_session),
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
-    if not session.get(Author, data.author_id):
-        raise HTTPException(status_code=404, detail="Author not found.")
+    author = session.get(Author, book.author_id)
 
-    book = Book(**data.model_dump())
-    session.add(book)
+    if not author:
+        raise HTTPException(
+            status_code=404,
+            detail="Author not found",
+        )
 
-    try:
-        session.commit()
-        session.refresh(book)
-    except IntegrityError:
-        session.rollback()
-        raise HTTPException(status_code=409, detail="A book with this ISBN already exists.")
+    new_book = Book(
+        title=book.title,
+        isbn=book.isbn,
+        price=book.price,
+        published_year=book.published_year,
+        description=book.description,
+        author_id=book.author_id,
+    )
 
-    return book
+    session.add(new_book)
+    session.commit()
+    session.refresh(new_book)
+
+    return BookRead(
+        id=new_book.id,
+        title=new_book.title,
+        isbn=new_book.isbn,
+        price=new_book.price,
+        published_year=new_book.published_year,
+        description=new_book.description,
+        author=author.name,
+    )
 
 
 @router.get("/", response_model=list[BookRead])
 def get_books(session: Session = Depends(get_session)):
-    return session.exec(select(Book)).all()
+    statement = select(Book).options(selectinload(Book.author))
+    books = session.exec(statement).all()
 
+    return [
+        BookRead(
+            id=book.id,
+            title=book.title,
+            isbn=book.isbn,
+            price=book.price,
+            published_year=book.published_year,
+            description=book.description,
+            author=book.author.name,
+        )
+        for book in books
+    ]
 
 @router.get("/{book_id}", response_model=BookRead)
 def get_book(book_id: int, session: Session = Depends(get_session)):
-    book = session.get(Book, book_id)
-    if not book:
-        raise HTTPException(status_code=404, detail="Book not found.")
-    return book
+    statement = (
+        select(Book)
+        .where(Book.id == book_id)
+        .options(selectinload(Book.author))
+    )
 
+    book = session.exec(statement).first()
+
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    return BookRead(
+        id=book.id,
+        title=book.title,
+        isbn=book.isbn,
+        price=book.price,
+        published_year=book.published_year,
+        description=book.description,
+        author=book.author.name,
+    )
 
 @router.put("/{book_id}", response_model=BookRead)
 def update_book(
